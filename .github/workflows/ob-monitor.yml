@@ -1,0 +1,23 @@
+name: OB 15m Monitor
+on:
+  schedule:
+    - cron: '1,16,31,46 * * * *'
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.10'}
+      - run: pip install requests pandas numpy loguru
+      - run: python check_ob_once.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+      - run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add data/live_signals.csv
+          git diff --staged --quiet || git commit -m "📊 Log $(date -u)"
+          git push
