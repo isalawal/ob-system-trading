@@ -7,7 +7,7 @@ BODY_MIN, VOL_MIN, ALIGN_MIN = 0.6, 1.2, 0.6
 TOKEN, CHAT = os.environ["TELEGRAM_TOKEN"], os.environ["TELEGRAM_CHAT"]
 
 def fetch_and_check():
-    url = f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}&interval={INTERVAL}&limit=30"
+    url = f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}&interval={INTERVAL}&limit=100"
     resp = requests.get(url, timeout=10).json()
     df = pd.DataFrame(resp, columns=['ts','o','h','l','c','v']+['x']*6)
     df[['o','h','l','c','v']] = df[['o','h','l','c','v']].astype(float)
@@ -29,6 +29,7 @@ def fetch_and_check():
     df['qqe_mom'] = rma - rma.shift(1)
     
     df = df.dropna()
+    if len(df) < 10: return None
     cand = df.iloc[-2] # Last CLOSED candle
     lb = 5
     s_low = df['l'].rolling(2*lb+1, center=True).min().iloc[-2] == cand['l']
