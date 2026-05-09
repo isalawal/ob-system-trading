@@ -50,9 +50,9 @@ let cvdVal=0,cvdH=[],domH=[],prevP=0;
 async function load(){
   try{
     const [rc,rt,rb]=await Promise.all([
-      fetch('https://api.allorigins.win/raw?url=https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60&limit=100'),
-      fetch('https://api.allorigins.win/raw?url=https://api.exchange.coinbase.com/products/BTC-USD/ticker'),
-      fetch('https://api.allorigins.win/raw?url=https://api.exchange.coinbase.com/products/BTC-USD/book?level=2')
+      fetch('https://corsproxy.io/?https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60&limit=100'),
+      fetch('https://corsproxy.io/?https://api.exchange.coinbase.com/products/BTC-USD/ticker'),
+      fetch('https://corsproxy.io/?https://api.exchange.coinbase.com/products/BTC-USD/book?level=2')
     ]);
     const raw=await rc.json();
     const rows=Array.isArray(raw)?raw:raw.candles;
