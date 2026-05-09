@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>BTC/USD Live</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#0d0f14;color:#c8d0e0;font-family:monospace;min-height:100vh}
+#hdr{background:#12151c;border-bottom:1px solid #1e2230;padding:10px 14px;display:flex;justify-content:space-between;align-items:center}
+.logo{color:#ffd740;font-size:15px;font-weight:bold}
+#price{color:#00e676;font-size:20px;font-weight:bold}
+.r1{display:grid;grid-template-columns:1fr 200px;gap:6px;padding:6px;height:400px}
+.r2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:0 6px;height:195px}
+.r3{padding:6px;height:155px}
+.c{background:#12151c;border:1px solid #1e2230;border-radius:4px;overflow:hidden}
+</style>
+</head>
+<body>
+<div id="hdr">
+  <div class="logo">◈ BTC/USD · COINBASE · 1MIN</div>
+  <div id="price">Loading...</div>
+</div>
+<div class="r1">
+  <div class="c"><div id="main" style="height:100%"></div></div>
+  <div class="c"><div id="dom" style="height:100%"></div></div>
+</div>
+<div class="r2">
+  <div class="c"><div id="vp" style="height:100%"></div></div>
+  <div class="c"><div id="dlt" style="height:100%"></div></div>
+  <div class="c"><div id="cvd" style="height:100%"></div></div>
+</div>
+<div class="r3">
+  <div class="c" style="height:100%"><div id="heat" style="height:100%"></div></div>
+</div>
+<script>
+const BG='#0d0f14',PN='#12151c',BR='#1e2230',TX='#c8d0e0',GR='#3a3f50';
+const GN='rgba(0,230,118,1)',GT='rgba(0,230,118,0.35)';
+const RD='rgba(255,23,68,1)',RT='rgba(255,23,68,0.35)';
+const PU='rgba(179,136,255,1)',GO='rgba(255,215,64,1)',GT2='rgba(255,215,64,0.08)';
+const base={paper_bgcolor:PN,plot_bgcolor:BG,font:{color:TX,size:10},
+  margin:{l:55,r:12,t:28,b:30},showlegend:false,
+  xaxis:{gridcolor:BR,zerolinecolor:BR,showgrid:true,color:TX},
+  yaxis:{gridcolor:BR,zerolinecolor:BR,showgrid:true,color:TX}};
+const lyt=(t,e={})=>({...base,title:{text:t,font:{size:11,color:GR},x:0.01,y:0.97},...e});
+
+let cvdVal=0,cvdH=[],domH=[],prevP=0;
+
+async function load(){
+  try{
+    const [rc,rt,rb]=await Promise.all([
+      fetch('https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60&limit=100'),
+      fetch('https://api.exchange.coinbase.com/products/BTC-USD/ticker'),
+      fetch('https://api.exchange.coinbase.com/products/BTC-USD/book?level=2')
+    ]);
+    const raw=await rc.json();
+    const rows=Array.isArray(raw)?raw:raw.candles;
+    const C=rows.map(r=>({t:new Date(r[0]*1000),o:+r[3],h:+r[2],l:+r[1],c:+r[4],v:+r[5]}))
+                .sort((a,b)=>a.t-b.t);
+    const tick=await rt.json();
+    const book=await rb.json();
+    const cur=+tick.price;
+
+    // price header
+    const pel=document.getElementById('price');
+    pel.textContent='$'+cur.toLocaleString('en-US',{minimumFractionDigits:2});
+    pel.style.color=cur>=(prevP||cur)?GN:RD;
+
+    // CVD
+    if(prevP){cvdVal+=cur-prevP;cvdH.push({t:new Date(),v:+cvdVal.toFixed(2)});if(cvdH.length>300)cvdH.shift();}
+    prevP=cur;
+
+    // DOM history
+    const bids=book.bids.slice(0,20).map(x=>({p:+x[0],q:+x[1]}));
+    const asks=book.asks.slice(0,20).map(x=>({p:+x[0],q:+x[1]}));
+    const bb=Math.max(...bids.map(b=>b.p));
+    const ba=Math.min(...asks.map(a=>a.p));
+    const bw=bids.reduce((a,b)=>b.q>a.q?b:a,bids[0]);
+    const aw=asks.reduce((a,b)=>b.q>a.q?b:a,asks[0]);
+    domH.push({t:new Date(),bb,ba,bw:bw.p,aw:aw.p});
+    if(domH.length>120)domH.shift();
+
+    // VWAP
+    let cumTPV=0,cumV=0;
+    const vwap=C.map(d=>{cumTPV+=((d.h+d.l+d.c)/3)*d.v;cumV+=d.v;return cumTPV/cumV;});
+
+    // Volume profile
+    const lo=Math.min(...C.map(d=>d.l)),hi=Math.max(...C.map(d=>d.h));
+    const bins=28,bh=(hi-lo)/bins;
+    const centers=Array.from({length:bins},(_,i)=>lo+(i+0.5)*bh);
+    const vols=new Array(bins).fill(0);
+    C.forEach(d=>centers.forEach((cv,i)=>{if(cv>=d.l&&cv<=d.h)vols[i]+=d.v/bins;}));
+    const mx=Math.max(...vols)||1;
+
+    // DOM max qty
+    const mq=Math.max(...bids.map(b=>b.q),...asks.map(a=>a.q))||1;
+
+    // Delta
+    const dv=C.map(d=>d.c-d.o);
+
+    // PLOT ALL
+    Plotly.react('main',[
+      {type:'candlestick',x:C.map(d=>d.t),open:C.map(d=>d.o),high:C.map(d=>d.h),
+       low:C.map(d=>d.l),close:C.map(d=>d.c),
+       increasing:{line:{color:GN,width:1},fillcolor:GT},
+       decreasing:{line:{color:RD,width:1},fillcolor:RT}},
+      {type:'scatter',x:C.map(d=>d.t),y:vwap,mode:'lines',line:{color:PU,width:1.5,dash:'dot'}},
+      {type:'bar',x:C.map(d=>d.t),y:C.map(d=>d.v),marker:{color:C.map(d=>d.c>=d.o?GT:RT)},yaxis:'y2'},
+    ],lyt('Candlesticks · VWAP · Volume',{
+      xaxis:{...base.xaxis,type:'date',rangeslider:{visible:false}},
+      yaxis:{...base.yaxis,side:'right'},
+      yaxis2:{overlaying:'y',side:'left',showgrid:false,showticklabels:false,range:[0,Math.max(...C.map(d=>d.v))*7]},
+    }));
+
+    Plotly.react('dom',[
+      {type:'bar',x:bids.map(b=>b.q),y:bids.map(b=>b.p),orientation:'h',
+       marker:{color:bids.map(b=>`rgba(0,230,118,${(0.2+0.7*b.q/mq).toFixed(3)})`)}},
+      {type:'bar',x:asks.map(a=>-a.q),y:asks.map(a=>a.p),orientation:'h',
+       marker:{color:asks.map(a=>`rgba(255,23,68,${(0.2+0.7*a.q/mq).toFixed(3)})`)}},
+    ],lyt('DOM · Order Book',{barmode:'overlay',
+      xaxis:{showticklabels:false,showgrid:false,zeroline:true,zerolinecolor:GO,zerolinewidth:1},
+      yaxis:{...base.yaxis,side:'right'}}));
+
+    Plotly.react('vp',[
+      {type:'bar',x:vols,y:centers,orientation:'h',width:bh*0.85,
+       marker:{color:vols.map(v=>`rgba(255,215,64,${(0.1+0.85*v/mx).toFixed(3)})`)}}
+    ],lyt('Volume Profile',{xaxis:{...base.xaxis},yaxis:{...base.yaxis,side:'right'}}));
+
+    Plotly.react('dlt',[
+      {type:'bar',x:C.map(d=>d.t),y:dv,marker:{color:dv.map(v=>v>=0?GN:RD)}}
+    ],lyt('Delta · Close − Open',{
+      shapes:[{type:'line',x0:C[0].t,x1:C[C.length-1].t,y0:0,y1:0,line:{color:GR,width:1}}]}));
+
+    if(cvdH.length){
+      const last=cvdH[cvdH.length-1].v;
+      Plotly.react('cvd',[
+        {type:'scatter',x:cvdH.map(d=>d.t),y:cvdH.map(d=>d.v),mode:'lines',
+         line:{color:last>=0?GN:RD,width:1.5},fill:'tozeroy',
+         fillcolor:last>=0?'rgba(0,230,118,0.15)':'rgba(255,23,68,0.15)'}
+      ],lyt('CVD · Cumulative Delta'));
+    }
+
+    if(domH.length>4){
+      Plotly.react('heat',[
+        {type:'scatter',x:domH.map(d=>d.t),y:domH.map(d=>d.bb),mode:'lines',line:{color:GN,width:1},name:'Best Bid'},
+        {type:'scatter',x:domH.map(d=>d.t),y:domH.map(d=>d.ba),mode:'lines',line:{color:RD,width:1},fill:'tonexty',fillcolor:GT2,name:'Best Ask'},
+        {type:'scatter',x:domH.map(d=>d.t),y:domH.map(d=>d.bw),mode:'markers',marker:{color:GN,size:5,symbol:'triangle-up'},name:'Bid Wall'},
+        {type:'scatter',x:domH.map(d=>d.t),y:domH.map(d=>d.aw),mode:'markers',marker:{color:RD,size:5,symbol:'triangle-down'},name:'Ask Wall'},
+      ],{...lyt('Liquidity Heatmap'),showlegend:true,
+        legend:{x:0.01,y:0.95,font:{size:9},bgcolor:'rgba(0,0,0,0)',orientation:'h'},
+        yaxis:{...base.yaxis,side:'right'}});
+    }
+    console.log('OK price='+cur);
+  }catch(e){console.error(e);}
+}
+
+load();
+setInterval(load,5000);
+</script>
+</body>
+</html>
