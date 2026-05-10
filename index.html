@@ -8,13 +8,12 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{background:#0d0f14;color:#c8d0e0;font-family:monospace;min-height:100vh}
-#hdr{background:#12151c;border-bottom:1px solid #1e2230;padding:10px 14px;display:flex;justify-content:space-between;align-items:center}
-.logo{color:#ffd740;font-size:15px;font-weight:bold}
+#hdr{background:#12151c;border-bottom:1px solid #1e2230;padding:8px 14px;display:flex;justify-content:space-between;align-items:center}
+.logo{color:#ffd740;font-size:14px;font-weight:bold}
 #price{color:#00e676;font-size:20px;font-weight:bold}
-#status{color:#00e676;font-size:10px;padding:3px 14px;background:#12151c;border-bottom:1px solid #1e2230}
-.r1{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:6px;height:380px}
-.r2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:0 6px;height:185px}
-.r3{padding:6px;height:145px}
+#status{color:#00e676;font-size:10px;padding:2px 14px;background:#0a0d12;border-bottom:1px solid #1e2230}
+.main-row{display:grid;grid-template-columns:1fr 260px;gap:6px;padding:6px;height:480px}
+.bottom-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:0 6px 6px;height:200px}
 .c{background:#12151c;border:1px solid #1e2230;border-radius:4px;overflow:hidden}
 </style>
 </head>
@@ -24,28 +23,33 @@ html,body{background:#0d0f14;color:#c8d0e0;font-family:monospace;min-height:100v
   <div id="price">--</div>
 </div>
 <div id="status">Starting...</div>
-<div class="r1">
+
+<div class="main-row">
+  <!-- Main chart: candles + VP + bubbles + VWAP -->
   <div class="c"><div id="main" style="height:100%"></div></div>
-  <div class="c"><div id="vp"   style="height:100%"></div></div>
+  <!-- DOM order book -->
+  <div class="c"><div id="dom" style="height:100%"></div></div>
 </div>
-<div class="r2">
-  <div class="c"><div id="dlt" style="height:100%"></div></div>
-  <div class="c"><div id="cvd" style="height:100%"></div></div>
-  <div class="c"><div id="vol" style="height:100%"></div></div>
+
+<div class="bottom-row">
+  <div class="c"><div id="delta" style="height:100%"></div></div>
+  <div class="c"><div id="cvd"   style="height:100%"></div></div>
+  <div class="c"><div id="vol"   style="height:100%"></div></div>
 </div>
-<div class="r3">
-  <div class="c" style="height:100%"><div id="heat" style="height:100%"></div></div>
-</div>
+
 <script>
 const BG='#0d0f14',PN='#12151c',BR='#1e2230',TX='#c8d0e0',GR='#3a3f50';
 const GN='rgba(0,230,118,1)',GT='rgba(0,230,118,0.3)';
-const RD='rgba(255,23,68,1)', RT='rgba(255,23,68,0.3)';
+const RD='rgba(255,23,68,1)',RT='rgba(255,23,68,0.3)';
 const PU='rgba(179,136,255,1)',GO='rgba(255,215,64,1)';
+const OR='rgba(255,140,0,0.25)';
+
 const base={paper_bgcolor:PN,plot_bgcolor:BG,font:{color:TX,size:10},
-  margin:{l:55,r:12,t:28,b:30},showlegend:false,
+  margin:{l:60,r:15,t:28,b:35},showlegend:false,
   xaxis:{gridcolor:BR,zerolinecolor:BR,showgrid:true,color:TX},
   yaxis:{gridcolor:BR,zerolinecolor:BR,showgrid:true,color:TX}};
-const lyt=(t,e={})=>({...base,title:{text:t,font:{size:11,color:GR},x:0.01,y:0.97},...e});
+const lyt=(t,e={})=>({...base,
+  title:{text:t,font:{size:11,color:GR},x:0.01,y:0.97},...e});
 
 const PROXY='https://corsproxy.io/?';
 const BASE='https://api.exchange.coinbase.com';
@@ -53,17 +57,15 @@ const BASE='https://api.exchange.coinbase.com';
 async function get(path){
   const url=BASE+path;
   try{
-    // try direct first
     const r=await fetch(url,{signal:AbortSignal.timeout(5000)});
     if(r.ok) return r.json();
   }catch(e){}
-  // fallback to proxy
   const r=await fetch(PROXY+encodeURIComponent(url),{signal:AbortSignal.timeout(8000)});
   if(!r.ok) throw new Error('HTTP '+r.status);
   return r.json();
 }
 
-let prevP=0,cvdVal=0,priceH=[],timeH=[];
+let prevP=0,cvdVal=0,trades=[];
 
 function status(msg,col='#00e676'){
   const el=document.getElementById('status');
@@ -72,27 +74,29 @@ function status(msg,col='#00e676'){
 
 async function load(){
   try{
-    status('Loading candles...');
-    const raw=await get('/products/BTC-USD/candles?granularity=60&limit=100');
-    const rows=Array.isArray(raw)?raw:raw.candles;
+    status('Loading...');
+    const [raw,tick,bookRaw]=await Promise.allSettled([
+      get('/products/BTC-USD/candles?granularity=60&limit=100'),
+      get('/products/BTC-USD/ticker'),
+      get('/products/BTC-USD/book?level=2'),
+    ]);
+
+    if(raw.status==='rejected') throw new Error('Candles failed');
+    const rows=Array.isArray(raw.value)?raw.value:raw.value.candles;
     const C=rows.map(r=>({
       t:new Date(r[0]*1000),o:+r[3],h:+r[2],l:+r[1],c:+r[4],v:+r[5]
     })).sort((a,b)=>a.t-b.t);
 
-    status('Loading ticker...');
-    const tick=await get('/products/BTC-USD/ticker');
-    const cur=+tick.price;
-
-    // update price header
+    const cur=tick.status==='fulfilled'?+tick.value.price:C[C.length-1].c;
     const pel=document.getElementById('price');
     pel.textContent='$'+cur.toLocaleString('en-US',{minimumFractionDigits:2});
     pel.style.color=cur>=(prevP||cur)?GN:RD;
-
-    // track price history for CVD proxy and heatmap
-    priceH.push({t:new Date(),p:cur});
-    if(priceH.length>200) priceH.shift();
-    if(prevP) cvdVal+=cur-prevP;
+    if(prevP){cvdVal+=cur-prevP;}
     prevP=cur;
+
+    // simulate large trade bubbles from candle volume spikes
+    const avgVol=C.reduce((s,d)=>s+d.v,0)/C.length;
+    const bubbles=C.filter(d=>d.v>avgVol*1.8);
 
     // VWAP
     let ct=0,cvo=0;
@@ -101,53 +105,139 @@ async function load(){
     // Volume profile
     const lo=Math.min(...C.map(d=>d.l));
     const hi=Math.max(...C.map(d=>d.h));
-    const BINS=30,bh=(hi-lo)/BINS;
+    const BINS=35,bh=(hi-lo)/BINS;
     const centers=Array.from({length:BINS},(_,i)=>lo+(i+0.5)*bh);
-    const vols=new Array(BINS).fill(0);
+    const vpVols=new Array(BINS).fill(0);
     C.forEach(d=>centers.forEach((cv,i)=>{
-      if(cv>=d.l&&cv<=d.h) vols[i]+=d.v/BINS;
+      if(cv>=d.l&&cv<=d.h) vpVols[i]+=d.v/BINS;
     }));
-    const mx=Math.max(...vols)||1;
+    const vpMax=Math.max(...vpVols)||1;
+    // find POC (point of control - highest volume level)
+    const pocIdx=vpVols.indexOf(vpMax);
+    const poc=centers[pocIdx];
+    // value area (70% of volume)
+    const totalVol=vpVols.reduce((s,v)=>s+v,0);
+    let cumVol=0,vaLo=lo,vaHi=hi;
+    const sorted=[...vpVols.map((v,i)=>({v,p:centers[i]}))].sort((a,b)=>b.v-a.v);
+    let vaVol=0; const vaLevels=[];
+    for(const s of sorted){
+      vaVol+=s.v; vaLevels.push(s.p);
+      if(vaVol>=totalVol*0.7) break;
+    }
+    vaLo=Math.min(...vaLevels);
+    vaHi=Math.max(...vaLevels);
 
-    // Delta per candle
+    // Delta
     const dv=C.map(d=>+(d.c-d.o).toFixed(2));
-
-    // CVD from candles (cumulative close-open)
     let run=0;
     const cvdY=C.map(d=>{run+=d.c-d.o;return +run.toFixed(2);});
-    const cvdLast=cvdY[cvdY.length-1];
 
-    status('Rendering...');
-
-    // MAIN candlestick + VWAP + volume
-    Plotly.react('main',[
+    // ── MAIN CHART
+    const traces=[
+      // Value Area highlight (orange zone like target)
+      {type:'scatter',
+       x:[C[0].t,C[C.length-1].t,C[C.length-1].t,C[0].t,C[0].t],
+       y:[vaHi,vaHi,vaLo,vaLo,vaHi],
+       fill:'toself',fillcolor:'rgba(255,140,0,0.12)',
+       line:{color:'rgba(255,140,0,0.4)',width:1},
+       mode:'lines',name:'Value Area'},
+      // POC line
+      {type:'scatter',
+       x:[C[0].t,C[C.length-1].t],y:[poc,poc],
+       mode:'lines',line:{color:'rgba(255,140,0,0.9)',width:1.5,dash:'dot'},
+       name:'POC'},
+      // Candlesticks
       {type:'candlestick',x:C.map(d=>d.t),
        open:C.map(d=>d.o),high:C.map(d=>d.h),
        low:C.map(d=>d.l),close:C.map(d=>d.c),
-       increasing:{line:{color:GN,width:1},fillcolor:GT},
-       decreasing:{line:{color:RD,width:1},fillcolor:RT}},
+       increasing:{line:{color:GN,width:1},fillcolor:'rgba(0,230,118,0.15)'},
+       decreasing:{line:{color:RD,width:1},fillcolor:'rgba(255,23,68,0.15)'}},
+      // VWAP
       {type:'scatter',x:C.map(d=>d.t),y:vwap,mode:'lines',
        line:{color:PU,width:1.5,dash:'dot'},name:'VWAP'},
+      // Volume bars
       {type:'bar',x:C.map(d=>d.t),y:C.map(d=>d.v),
-       marker:{color:C.map(d=>d.c>=d.o?GT:RT)},yaxis:'y2',name:'Vol'},
-    ],lyt('Candlesticks · VWAP · Volume',{
-      xaxis:{...base.xaxis,type:'date',rangeslider:{visible:false}},
-      yaxis:{...base.yaxis,side:'right'},
-      yaxis2:{overlaying:'y',side:'left',showgrid:false,showticklabels:false,
-              range:[0,Math.max(...C.map(d=>d.v))*7]},
+       marker:{color:C.map(d=>d.c>=d.o?GT:RT)},
+       yaxis:'y2',name:'Vol'},
+      // BUY bubbles (green, above candle)
+      {type:'scatter',
+       x:bubbles.filter(d=>d.c>=d.o).map(d=>d.t),
+       y:bubbles.filter(d=>d.c>=d.o).map(d=>d.h+(hi-lo)*0.005),
+       mode:'markers',
+       marker:{
+         color:GN,
+         size:bubbles.filter(d=>d.c>=d.o).map(d=>Math.min(40,Math.max(8,d.v/avgVol*10))),
+         opacity:0.85,
+         line:{color:'rgba(0,255,100,0.3)',width:1}
+       },
+       name:'Buy',
+       hovertemplate:'Buy Vol: %{customdata:.2f}<extra></extra>',
+       customdata:bubbles.filter(d=>d.c>=d.o).map(d=>d.v)},
+      // SELL bubbles (red, below candle)
+      {type:'scatter',
+       x:bubbles.filter(d=>d.c<d.o).map(d=>d.t),
+       y:bubbles.filter(d=>d.c<d.o).map(d=>d.l-(hi-lo)*0.005),
+       mode:'markers',
+       marker:{
+         color:RD,
+         size:bubbles.filter(d=>d.c<d.o).map(d=>Math.min(40,Math.max(8,d.v/avgVol*10))),
+         opacity:0.85,
+         line:{color:'rgba(255,23,68,0.3)',width:1}
+       },
+       name:'Sell',
+       hovertemplate:'Sell Vol: %{customdata:.2f}<extra></extra>',
+       customdata:bubbles.filter(d=>d.c<d.o).map(d=>d.v)},
+    ];
+
+    // add volume profile as horizontal bars on right side
+    const vpTraces=vpVols.map((v,i)=>({
+      type:'bar',
+      x:[v],y:[centers[i]],
+      orientation:'h',
+      width:bh*0.85,
+      marker:{color:`rgba(255,215,64,${(0.1+0.85*v/vpMax).toFixed(2)})`},
+      xaxis:'x2',
+      showlegend:false,
+      hoverinfo:'skip',
     }));
 
-    // VOLUME PROFILE
-    Plotly.react('vp',[{
-      type:'bar',x:vols,y:centers,orientation:'h',width:bh*0.85,
-      marker:{color:vols.map(v=>`rgba(255,215,64,${(0.1+0.85*v/mx).toFixed(2)})`)}
-    }],lyt('Volume Profile',{
-      xaxis:{...base.xaxis,title:'Volume'},
+    Plotly.react('main',[...traces,...vpTraces],{
+      ...lyt('Candlesticks · VP · VWAP · Bubbles'),
+      xaxis:{...base.xaxis,type:'date',
+             rangeslider:{visible:false},domain:[0,0.78]},
+      xaxis2:{domain:[0.80,1.0],showgrid:false,
+              showticklabels:false,color:TX,
+              zeroline:false},
       yaxis:{...base.yaxis,side:'right'},
-    }));
+      yaxis2:{overlaying:'y',side:'left',showgrid:false,
+              showticklabels:false,
+              range:[0,Math.max(...C.map(d=>d.v))*8]},
+      showlegend:false,
+    });
 
-    // DELTA
-    Plotly.react('dlt',[{
+    // ── DOM
+    if(bookRaw.status==='fulfilled'){
+      const book=bookRaw.value;
+      const bids=book.bids.slice(0,25).map(x=>({p:+x[0],q:+x[1]}));
+      const asks=book.asks.slice(0,25).map(x=>({p:+x[0],q:+x[1]}));
+      const mq=Math.max(...bids.map(b=>b.q),...asks.map(a=>a.q))||1;
+      Plotly.react('dom',[
+        {type:'bar',x:bids.map(b=>b.q),y:bids.map(b=>b.p),
+         orientation:'h',
+         marker:{color:bids.map(b=>`rgba(0,230,118,${(0.15+0.75*b.q/mq).toFixed(2)})`)}},
+        {type:'bar',x:asks.map(a=>-a.q),y:asks.map(a=>a.p),
+         orientation:'h',
+         marker:{color:asks.map(a=>`rgba(255,23,68,${(0.15+0.75*a.q/mq).toFixed(2)})`)}},
+      ],lyt('DOM · Order Book',{
+        barmode:'overlay',
+        xaxis:{showticklabels:false,showgrid:false,
+               zeroline:true,zerolinecolor:GO,zerolinewidth:1},
+        yaxis:{...base.yaxis,side:'right'},
+      }));
+    }
+
+    // ── DELTA
+    Plotly.react('delta',[{
       type:'bar',x:C.map(d=>d.t),y:dv,
       marker:{color:dv.map(v=>v>=0?GN:RD)},
     }],lyt('Delta · Close − Open',{
@@ -155,7 +245,8 @@ async function load(){
                y0:0,y1:0,line:{color:GR,width:1}}],
     }));
 
-    // CVD
+    // ── CVD
+    const cvdLast=cvdY[cvdY.length-1];
     Plotly.react('cvd',[{
       type:'scatter',x:C.map(d=>d.t),y:cvdY,mode:'lines',
       line:{color:cvdLast>=0?GN:RD,width:1.5},
@@ -163,45 +254,16 @@ async function load(){
       fillcolor:cvdLast>=0?'rgba(0,230,118,0.15)':'rgba(255,23,68,0.15)',
     }],lyt('CVD · Cumulative Delta'));
 
-    // VOLUME BARS standalone
+    // ── VOLUME per candle
     Plotly.react('vol',[{
       type:'bar',x:C.map(d=>d.t),y:C.map(d=>d.v),
       marker:{color:C.map(d=>d.c>=d.o?GT:RT)},
-    }],lyt('Volume · Per Candle',{
-      yaxis:{...base.yaxis,side:'right'},
-    }));
+    }],lyt('Volume · Per Candle'));
 
-    // HEATMAP - price history
-    if(priceH.length>3){
-      const ph=priceH.map(d=>d.p);
-      const pmax=Math.max(...ph),pmin=Math.min(...ph);
-      const pmid=(pmax+pmin)/2;
-      Plotly.react('heat',[
-        {type:'scatter',x:priceH.map(d=>d.t),y:ph,
-         mode:'lines',line:{color:GO,width:1.5},
-         fill:'tozeroy',fillcolor:'rgba(255,215,64,0.05)',
-         name:'Price'},
-        // support/resistance levels
-        {type:'scatter',
-         x:[priceH[0].t,priceH[priceH.length-1].t],
-         y:[pmax,pmax],mode:'lines',
-         line:{color:RD,width:1,dash:'dot'},name:'High'},
-        {type:'scatter',
-         x:[priceH[0].t,priceH[priceH.length-1].t],
-         y:[pmin,pmin],mode:'lines',
-         line:{color:GN,width:1,dash:'dot'},name:'Low'},
-      ],{...lyt('Price History · Support & Resistance'),
-        showlegend:true,
-        legend:{x:0.01,y:0.95,font:{size:9},
-                bgcolor:'rgba(0,0,0,0)',orientation:'h'},
-        yaxis:{...base.yaxis,side:'right'},
-      });
-    }
-
-    status(`✓ Live $${cur.toLocaleString()} · updates every 5s · BTC/USD Coinbase`);
+    status(`✓ Live $${cur.toLocaleString()} · ${new Date().toLocaleTimeString()} · updates every 5s`);
 
   }catch(e){
-    status('Error: '+e.message+' retrying...','#ff1744');
+    status('Error: '+e.message,'#ff1744');
     console.error(e);
   }
 }
